@@ -1,0 +1,320 @@
+// This is your Prisma schema file for PrepareC
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+  extensions = [vector]
+}
+
+// ========================================
+// USUÁRIOS E ORGANIZAÇÕES
+// ========================================
+
+enum UserRole {
+  ADMIN
+  USER
+}
+
+model Organization {
+  id                 String             @id @default(uuid())
+  name               String
+  document           String?
+  plan               PlanType           @default(FREE)
+  subscriptionStatus SubscriptionStatus @default(TRIALING)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  users           User[]
+  clients         Client[]
+  consultancyLogs ConsultancyLog[]
+
+  @@map("organizations")
+}
+
+model User {
+  id        String   @id // Clerk ID (user_...)
+  email     String   @unique
+  firstName String?
+  lastName  String?
+  imageUrl  String?
+  role      UserRole @default(USER)
+
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+
+  // Dados de Assinatura (Stripe)
+  stripeCustomerId String? @unique
+  subscriptionId   String? // Active subscription ID
+
+  // Relações
+  messages        ChatMessage[]
+  conversations   Conversation[]
+  subscription    Subscription?
+  payments        Payment[]
+  notifications   Notification[]
+  consultancyLogs ConsultancyLog[]
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+// ========================================
+// CLIENTES E CONSULTORIA
+// ========================================
+
+model Client {
+  id             String       @id @default(uuid())
+  name           String
+  document       String
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@map("clients")
+}
+
+model ConsultancyLog {
+  id             String       @id @default(uuid())
+  question       String       @db.Text
+  answer         String       @db.Text
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contextData    Json?
+  createdAt      DateTime     @default(now())
+
+  @@map("consultancy_logs")
+}
+
+// ========================================
+// CONTEÚDO JURÍDICO (RAG / EMBEDDINGS)
+// ========================================
+
+model LegalDocument {
+  id              String       @id @default(uuid())
+  title           String
+  type            DocumentType // LEI_COMPLEMENTAR, INSTRUCAO_NORMATIVA, SOLUCAO_CONSULTA
+  source          String // URL oficial (planalto.gov.br)
+  publicationDate DateTime?
+
+  // Conteúdo
+  content String  @db.Text
+  summary String? @db.Text
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relações
+  chunks DocumentChunk[]
+
+  @@map("legal_documents")
+}
+
+model DocumentChunk {
+  id         String        @id @default(uuid())
+  documentId String
+  document   LegalDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  content String @db.Text // O trecho específico
+  embedding   Unsupported("vector(1536)")? // OpenAI embedding (Requires pgvector)
+
+  chunkIndex Int // Ordem no documento original
+
+  @@map("document_chunks")
+}
+
+enum DocumentType {
+  LEI_COMPLEMENTAR
+  EMENDA_CONSTITUCIONAL
+  LEI_ORDINARIA
+  MEDIDA_PROVISORIA
+  DECRETO
+  INSTRUCAO_NORMATIVA
+  SOLUCAO_CONSULTA
+  NOTA_TECNICA
+}
+
+// ========================================
+// CHAT E CONVERSAS (IA)
+// ========================================
+
+model Conversation {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title  String             @default("Nova Conversa")
+  status ConversationStatus @default(ACTIVE)
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relações
+  messages ChatMessage[]
+
+  @@index([userId])
+  @@map("conversations")
+}
+
+model ChatMessage {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  role    MessageRole // USER, ASSISTANT
+  content String      @db.Text
+
+  // RAG Metadata (Citações)
+  sources Json? // Array de { title, url, snippet }
+
+  createdAt DateTime @default(now())
+
+  @@index([conversationId])
+  @@map("chat_messages")
+}
+
+enum ConversationStatus {
+  ACTIVE
+  ARCHIVED
+  DELETED
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+// ========================================
+// ASSINATURAS E PAGAMENTOS (STRIPE)
+// ========================================
+
+model Subscription {
+  id     String @id @default(uuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Stripe Data
+  stripeSubscriptionId   String   @unique
+  stripePriceId          String
+  stripeCurrentPeriodEnd DateTime
+
+  status   SubscriptionStatus @default(ACTIVE)
+  planType PlanType           @default(FREE)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  payments Payment[]
+
+  @@map("subscriptions")
+}
+
+model Payment {
+  id             String        @id @default(uuid())
+  subscriptionId String?
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id])
+  userId         String
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  amount   Decimal       @db.Decimal(10, 2)
+  currency String        @default("BRL")
+  status   PaymentStatus @default(PENDING)
+
+  stripePaymentIntentId String? @unique
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("payments")
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELED
+  PAST_DUE
+  UNPAID
+  TRIALING
+}
+
+enum PlanType {
+  FREE
+  ESSENTIAL
+  PRO
+  ELITE
+  ENTERPRISE
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+
+// ========================================
+// NOTIFICAÇÕES
+// ========================================
+
+model Notification {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title   String
+  message String           @db.Text
+  type    NotificationType
+  read    Boolean          @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("notifications")
+}
+
+enum NotificationType {
+  SYSTEM
+  BILLING
+  LEGAL_UPDATE
+}
+
+// ========================================
+// GROWTH E MARKETING (Startup Metrics)
+// ========================================
+
+model Waitlist {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  source    String?  // Ex: "linkedin", "direct"
+  status    String   @default("PENDING") // PENDING, INVITED, JOINED
+  createdAt DateTime @default(now())
+}
+
+model Lead {
+  id            String   @id @default(cuid())
+  email         String
+  companyName   String?
+  sector        String?  // Setor de atuação
+  revenueRange  String?  // Faixa de faturamento para análise de impacto
+  impactResults Json?    // Resultado da simulação gratuita
+  createdAt     DateTime @default(now())
+
+  @@index([email])
+}
