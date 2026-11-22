@@ -48,7 +48,7 @@ export function Footer() {
                             <Link href="/termos" className="hover:text-foreground transition-colors">Termos</Link>
                         </span>
                         <x-selo site="preparec.com.br" className="text-[11px]">
-                            <a href="https://wa.me/5531975808477" target="_blank" rel="noopener noreferrer" style={{ color: "inherit" }}>Desenvolvido por X Soluções Digitais</a>
+                            <a href="https://wa.me/5531935027635" target="_blank" rel="noopener noreferrer" style={{ color: "inherit" }}>Desenvolvido por X Soluções Digitais</a>
                         </x-selo>
                         <SeloScript />
                     </div>
